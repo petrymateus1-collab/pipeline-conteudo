@@ -1,7 +1,7 @@
 const express = require("express");
 const axios = require("axios");
 const multer = require("multer");
-const { S3Client, PutObjectCommand, GetObjectCommand } = require("@aws-sdk/client-s3");
+const { S3Client, PutObjectCommand, GetObjectCommand, ListObjectsV2Command } = require("@aws-sdk/client-s3");
 const { execSync } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -23,7 +23,7 @@ const BUCKET = "pipeline-conteudo";
 const R2_PUBLIC = "https://pub-4f2d74fa9c7c4f0089849a2be3a4f517.r2.dev";
 
 function log(msg) { console.log("[" + new Date().toISOString() + "] " + msg); }
-function run(cmd) { log("FFmpeg: " + cmd.substring(0, 100)); return execSync(cmd, { stdio: "pipe" }).toString(); }
+function run(cmd) { log("CMD: " + cmd.substring(0, 120)); return execSync(cmd, { stdio: "pipe" }).toString(); }
 function randomBetween(min, max) { return Math.random() * (max - min) + min; }
 
 async function downloadFile(url, destPath) {
@@ -56,6 +56,13 @@ function getDuration(f) {
   return parseFloat(execSync('ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "' + f + '"').toString().trim());
 }
 
+function hasVideoStream(f) {
+  try {
+    const out = execSync('ffprobe -v error -select_streams v:0 -show_entries stream=codec_type -of csv=p=0 "' + f + '"').toString().trim();
+    return out === "video";
+  } catch(e) { return false; }
+}
+
 async function montarVideo(videoPath, workDir, assets) {
   const jobId = uuidv4().substring(0, 8);
   const outputPath = path.join(workDir, "output_" + jobId + ".mp4");
@@ -64,26 +71,32 @@ async function montarVideo(videoPath, workDir, assets) {
   const normalizedPath = path.join(workDir, "norm_" + jobId + ".mp4");
   run('ffmpeg -y -i "' + videoPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + normalizedPath + '"');
 
+  if (!hasVideoStream(normalizedPath)) throw new Error("Normalizacao falhou - sem stream de video");
+
   const durTotal = getDuration(normalizedPath);
   log("Duracao: " + durTotal + "s");
 
   const pngs = (assets.pngs || []).sort(() => Math.random() - 0.5).slice(0, 4);
-  let inputs = '"' + normalizedPath + '" -i "' + assets.music + '"';
-  let musicIdx = 1;
-  let sfxInIdx = -1;
-  let sfxOutIdx = -1;
 
-  if (assets.sfxIn && fs.existsSync(assets.sfxIn)) { inputs += ' -i "' + assets.sfxIn + '"'; sfxInIdx = 2; }
-  if (assets.sfxOut && fs.existsSync(assets.sfxOut)) { inputs += ' -i "' + assets.sfxOut + '"'; sfxOutIdx = sfxInIdx >= 0 ? 3 : 2; }
+  let inputFiles = [normalizedPath];
+  if (assets.music) inputFiles.push(assets.music);
+  if (assets.sfxIn && fs.existsSync(assets.sfxIn)) inputFiles.push(assets.sfxIn);
+  if (assets.sfxOut && fs.existsSync(assets.sfxOut)) inputFiles.push(assets.sfxOut);
+  pngs.forEach(p => inputFiles.push(p));
 
-  let pngStart = (sfxOutIdx >= 0 ? sfxOutIdx : (sfxInIdx >= 0 ? sfxInIdx : musicIdx)) + 1;
-  pngs.forEach(p => { inputs += ' -i "' + p + '"'; });
+  const vidIdx = 0;
+  const musIdx = 1;
+  const sfxInIdx = assets.sfxIn && fs.existsSync(assets.sfxIn) ? 2 : -1;
+  const sfxOutIdx = sfxInIdx >= 0 ? 3 : (assets.sfxOut && fs.existsSync(assets.sfxOut) ? 2 : -1);
+  const pngStartIdx = inputFiles.indexOf(pngs[0]);
+
+  const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
   let filters = [];
-  let lastVideo = "0:v";
+  let lastVideo = vidIdx + ":v";
 
   pngs.forEach((p, i) => {
-    const idx = pngStart + i;
+    const idx = pngStartIdx + i;
     const st = randomBetween(2, Math.max(3, durTotal * 0.2 + i * (durTotal / (pngs.length + 1))));
     const dur = randomBetween(3, 5);
     const et = Math.min(st + dur, durTotal - 1);
@@ -105,8 +118,8 @@ async function montarVideo(videoPath, workDir, assets) {
   filters.push("[" + lastVideo + "]fade=t=in:st=0:d=0.3,fade=t=out:st=" + (durTotal - 0.3).toFixed(2) + ":d=0.3[vfinal]");
 
   let afilters = [];
-  afilters.push("[" + musicIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
-  afilters.push("[0:a]volume=1.0[orig]");
+  afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
+  afilters.push("[" + vidIdx + ":a]volume=1.0[orig]");
   let amix = "[mus][orig]";
   let amixN = 2;
   if (sfxInIdx >= 0) { afilters.push("[" + sfxInIdx + ":a]adelay=0|0,volume=0.8[sin]"); amix += "[sin]"; amixN++; }
@@ -114,7 +127,7 @@ async function montarVideo(videoPath, workDir, assets) {
   afilters.push(amix + "amix=inputs=" + amixN + ":duration=first:dropout_transition=2[afinal]");
 
   const fc = [...filters, ...afilters].join(";");
-  run('ffmpeg -y ' + inputs + ' -filter_complex "' + fc + '" -map "[vfinal]" -map "[afinal]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
+  run('ffmpeg -y ' + inputArgs + ' -filter_complex "' + fc + '" -map "[vfinal]" -map "[afinal]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
   return outputPath;
@@ -142,20 +155,23 @@ app.post("/processar", upload.single("video"), async (req, res) => {
     const sfxOutPath = path.join(workDir, "sfx_out.mp3");
     let assets = { music: null, sfxIn: null, sfxOut: null, pngs: [] };
 
-    try { await downloadFromR2("assets/musicas/LAST HOPE.mp3", musicPath); assets.music = musicPath; } catch(e) { log("Musica nao encontrada: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/transicao/INPUT.MP3", sfxInPath); assets.sfxIn = sfxInPath; } catch(e) { log("SFX entrada nao encontrado"); }
-    try { await downloadFromR2("assets/efeitos-sonoros/transicao/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; } catch(e) { log("SFX saida nao encontrado"); }
+    try { await downloadFromR2("assets/musicas/LAST HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada: " + e.message); }
+    try { await downloadFromR2("assets/efeitos-sonoros/transicao/INPUT.MP3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX entrada OK"); } catch(e) { log("SFX entrada nao encontrado: " + e.message); }
+    try { await downloadFromR2("assets/efeitos-sonoros/transicao/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX saida OK"); } catch(e) { log("SFX saida nao encontrado: " + e.message); }
 
-    const r2List = await R2.send(new (require("@aws-sdk/client-s3").ListObjectsV2Command)({ Bucket: BUCKET, Prefix: "assets/ilustracoes/" }));
-    if (r2List.Contents) {
-      for (const obj of r2List.Contents) {
-        if (obj.Key.endsWith(".png") || obj.Key.endsWith(".PNG")) {
-          const fname = path.basename(obj.Key);
-          const pp = path.join(workDir, fname);
-          try { await downloadFromR2(obj.Key, pp); assets.pngs.push(pp); } catch(e) {}
+    try {
+      const r2List = await R2.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: "assets/ilustracoes/" }));
+      if (r2List.Contents) {
+        for (const obj of r2List.Contents) {
+          if (obj.Key.match(/\.(png|PNG)$/)) {
+            const fname = path.basename(obj.Key);
+            const pp = path.join(workDir, fname);
+            try { await downloadFromR2(obj.Key, pp); assets.pngs.push(pp); } catch(e) {}
+          }
         }
       }
-    }
+      log("PNGs carregados: " + assets.pngs.length);
+    } catch(e) { log("Erro listando PNGs: " + e.message); }
 
     if (!assets.music) {
       const sil = path.join(workDir, "silence.mp3");
