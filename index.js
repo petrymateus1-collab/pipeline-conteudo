@@ -19,7 +19,7 @@ const R2 = new S3Client({
     secretAccessKey: "78b5405346dfbfa75bb87eca40cfdf7b6e959e635698e0d46ab22ee110878f99"
   }
 });
-const BUCKET = "pipeline-videos";
+const BUCKET = "pipeline-conteudo";
 const R2_PUBLIC = "https://pub-4f2d74fa9c7c4f0089849a2be3a4f517.r2.dev";
 
 function log(msg) { console.log("[" + new Date().toISOString() + "] " + msg); }
@@ -142,14 +142,18 @@ app.post("/processar", upload.single("video"), async (req, res) => {
     const sfxOutPath = path.join(workDir, "sfx_out.mp3");
     let assets = { music: null, sfxIn: null, sfxOut: null, pngs: [] };
 
-    try { await downloadFromR2("assets/LAST HOPE.mp3", musicPath); assets.music = musicPath; } catch(e) { log("Musica nao encontrada: " + e.message); }
-    try { await downloadFromR2("assets/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; } catch(e) { log("SFX entrada nao encontrado"); }
-    try { await downloadFromR2("assets/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; } catch(e) { log("SFX saida nao encontrado"); }
+    try { await downloadFromR2("assets/musicas/LAST HOPE.mp3", musicPath); assets.music = musicPath; } catch(e) { log("Musica nao encontrada: " + e.message); }
+    try { await downloadFromR2("assets/efeitos-sonoros/transicao/INPUT.MP3", sfxInPath); assets.sfxIn = sfxInPath; } catch(e) { log("SFX entrada nao encontrado"); }
+    try { await downloadFromR2("assets/efeitos-sonoros/transicao/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; } catch(e) { log("SFX saida nao encontrado"); }
 
-    for (const cat of ["esperanca","cura","alma_gemea"]) {
-      for (let i = 1; i <= 5; i++) {
-        const pp = path.join(workDir, cat + "_" + i + ".png");
-        try { await downloadFromR2("assets/pngs/" + cat + "_" + i + ".png", pp); assets.pngs.push(pp); } catch(e) {}
+    const r2List = await R2.send(new (require("@aws-sdk/client-s3").ListObjectsV2Command)({ Bucket: BUCKET, Prefix: "assets/ilustracoes/" }));
+    if (r2List.Contents) {
+      for (const obj of r2List.Contents) {
+        if (obj.Key.endsWith(".png") || obj.Key.endsWith(".PNG")) {
+          const fname = path.basename(obj.Key);
+          const pp = path.join(workDir, fname);
+          try { await downloadFromR2(obj.Key, pp); assets.pngs.push(pp); } catch(e) {}
+        }
       }
     }
 
