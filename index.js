@@ -117,18 +117,9 @@ async function montarVideo(videoPath, workDir, assets) {
     const st = randomBetween(2, Math.max(3, durTotal * 0.2 + i * (durTotal / (pngs.length + 1))));
     const dur = randomBetween(3, 5);
     const et = Math.min(st + dur, durTotal - 1);
-    const isOverlay = Math.random() > 0.5;
     filters.push("[" + idx + ":v]scale=720:1280,setsar=1[sp" + i + "]");
     filters.push("[sp" + i + "]fade=t=in:st=0:d=0.15,fade=t=out:st=" + (dur - 0.15).toFixed(2) + ":d=0.15[fp" + i + "]");
-    if (isOverlay) {
-      filters.push("[" + lastVideo + "][fp" + i + "]overlay=0:0:enable='between(t," + st.toFixed(2) + "," + et.toFixed(2) + ")'[vp" + i + "]");
-    } else {
-      filters.push("[" + lastVideo + "]split[ba" + i + "][bb" + i + "]");
-      filters.push("[ba" + i + "]trim=0:" + st.toFixed(2) + ",setpts=PTS-STARTPTS[pre" + i + "]");
-      filters.push("[fp" + i + "]trim=0:" + dur.toFixed(2) + ",setpts=PTS-STARTPTS[mid" + i + "]");
-      filters.push("[bb" + i + "]trim=" + et.toFixed(2) + ":" + durTotal + ",setpts=PTS-STARTPTS[pos" + i + "]");
-      filters.push("[pre" + i + "][mid" + i + "][pos" + i + "]concat=n=3:v=1:a=0[vp" + i + "]");
-    }
+    filters.push("[" + lastVideo + "][fp" + i + "]overlay=0:0:enable='between(t," + st.toFixed(2) + "," + et.toFixed(2) + ")'[vp" + i + "]");
     lastVideo = "vp" + i;
   });
 
