@@ -209,7 +209,7 @@ async function montarVideo(videoPath, workDir, assets) {
       const st = cta.start.toFixed(2);
       const et = cta.end.toFixed(2);
       const nextPath = path.join(workDir, "vid_cta_" + i + "_" + jobId + ".mp4");
-      const fc = "[1:v]scale=160:160[s];[0:v][s]overlay=" + pos.x + ":" + pos.y + ":enable='between(t," + st + "," + et + ")'[v]";
+      const fc = "[1:v]scale=240:240[s];[0:v][s]overlay=" + pos.x + ":" + pos.y + ":enable='between(t," + st + "," + et + ")'[v]";
       run('ffmpeg -y -i "' + currentInput + '" -i "' + setaPath + '" -filter_complex "' + fc + '" -map "[v]" -map "0:a" -c:v libx264 -preset fast -crf 23 -c:a copy "' + nextPath + '"');
       currentInput = nextPath;
     });
