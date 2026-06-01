@@ -80,127 +80,85 @@ async function listAllPngs(prefix) {
   return keys;
 }
 
+// Converte PNG em clipe MP4 com duração fixa
+function pngToClip(pngPath, clipPath, dur) {
+  run('ffmpeg -y -loop 1 -i "' + pngPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p" -t ' + dur + ' -c:v libx264 -preset fast -crf 23 "' + clipPath + '"');
+}
+
 async function montarVideo(videoPath, workDir, assets) {
   const jobId = uuidv4().substring(0, 8);
   const outputPath = path.join(workDir, "output_" + jobId + ".mp4");
   log("Iniciando montagem job " + jobId);
 
   const normalizedPath = path.join(workDir, "norm_" + jobId + ".mp4");
-  run('ffmpeg -y -i "' + videoPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + normalizedPath + '"');
+  run('ffmpeg -y -i "' + videoPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + normalizedPath + '"');
 
   if (!hasVideoStream(normalizedPath)) throw new Error("Normalizacao falhou - sem stream de video");
 
   const durTotal = getDuration(normalizedPath);
   log("Duracao: " + durTotal + "s");
 
-  const pngs = (assets.pngs || []).sort(() => Math.random() - 0.5).slice(0, 4);
+  const pngs = (assets.pngs || []).sort(() => Math.random() - 0.5).slice(0, 3);
+  log("Usando " + pngs.length + " PNGs");
 
+  // Converte cada PNG em clipe MP4
+  const pngClips = [];
+  const pngTimings = [];
+  pngs.forEach((p, i) => {
+    const dur = randomBetween(3, 5);
+    const st = randomBetween(3, Math.max(4, durTotal * 0.15 + i * (durTotal / (pngs.length + 1))));
+    const et = Math.min(st + dur, durTotal - 2);
+    const clipPath = path.join(workDir, "clip_" + i + ".mp4");
+    pngToClip(p, clipPath, dur);
+    pngClips.push(clipPath);
+    pngTimings.push({ st: st.toFixed(2), et: et.toFixed(2), dur: dur.toFixed(2) });
+    log("PNG " + i + " convertido: st=" + st.toFixed(2) + "s dur=" + dur.toFixed(2) + "s");
+  });
+
+  // Monta inputs
   let inputFiles = [normalizedPath];
   if (assets.music) inputFiles.push(assets.music);
   if (assets.sfxIn && fs.existsSync(assets.sfxIn)) inputFiles.push(assets.sfxIn);
   if (assets.sfxOut && fs.existsSync(assets.sfxOut)) inputFiles.push(assets.sfxOut);
-  pngs.forEach(p => inputFiles.push(p));
+  pngClips.forEach(c => inputFiles.push(c));
 
   const vidIdx = 0;
   const musIdx = 1;
   const sfxInIdx = (assets.sfxIn && fs.existsSync(assets.sfxIn)) ? 2 : -1;
   const sfxOutIdx = sfxInIdx >= 0 ? ((assets.sfxOut && fs.existsSync(assets.sfxOut)) ? 3 : -1) : ((assets.sfxOut && fs.existsSync(assets.sfxOut)) ? 2 : -1);
-  const pngStartIdx = pngs.length > 0 ? inputFiles.indexOf(pngs[0]) : -1;
+  const clipStartIdx = inputFiles.indexOf(pngClips[0]);
 
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
   let filters = [];
   let lastVideo = vidIdx + ":v";
 
-  pngs.forEach((p, i) => {
-    const idx = pngStartIdx + i;
-    const st = randomBetween(2, Math.max(3, durTotal * 0.2 + i * (durTotal / (pngs.length + 1))));
-    const dur = randomBetween(3, 5);
-    const et = Math.min(st + dur, durTotal - 1);
-    filters.push("[" + idx + ":v]scale=720:1280,setsar=1[sp" + i + "]");
-    filters.push("[sp" + i + "]fade=t=in:st=0:d=0.15,fade=t=out:st=" + (dur - 0.15).toFixed(2) + ":d=0.15[fp" + i + "]");
-    filters.push("[" + lastVideo + "][fp" + i + "]overlay=0:0:enable='between(t," + st.toFixed(2) + "," + et.toFixed(2) + ")'[vp" + i + "]");
+  // Overlay de cada clipe PNG no momento certo
+  pngClips.forEach((c, i) => {
+    const idx = clipStartIdx + i;
+    const { st, et } = pngTimings[i];
+    filters.push("[" + idx + ":v]fade=t=in:st=0:d=0.15,fade=t=out:st=" + (parseFloat(pngTimings[i].dur) - 0.15).toFixed(2) + ":d=0.15[fp" + i + "]");
+    filters.push("[" + lastVideo + "][fp" + i + "]overlay=0:0:enable='between(t," + st + "," + et + ")'[vp" + i + "]");
     lastVideo = "vp" + i;
   });
 
   filters.push("[" + lastVideo + "]fade=t=in:st=0:d=0.3,fade=t=out:st=" + (durTotal - 0.3).toFixed(2) + ":d=0.3[vfinal]");
 
+  // Áudio
   let afilters = [];
   afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
   afilters.push("[" + vidIdx + ":a]volume=1.0[orig]");
   let amix = "[mus][orig]";
   let amixN = 2;
-  if (sfxInIdx >= 0) { afilters.push("[" + sfxInIdx + ":a]adelay=0|0,volume=0.8[sin]"); amix += "[sin]"; amixN++; }
-  if (sfxOutIdx >= 0) { const d = Math.round(Math.max(0, (durTotal - 1.5) * 1000)); afilters.push("[" + sfxOutIdx + ":a]adelay=" + d + "|" + d + ",volume=0.8[sout]"); amix += "[sout]"; amixN++; }
-  afilters.push(amix + "amix=inputs=" + amixN + ":duration=first:dropout_transition=2[afinal]");
 
-  const fc = [...filters, ...afilters].join(";");
-  run('ffmpeg -y ' + inputArgs + ' -filter_complex "' + fc + '" -map "[vfinal]" -map "[afinal]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
-
-  log("Video montado: " + outputPath);
-  return outputPath;
-}
-
-app.post("/processar", upload.single("video"), async (req, res) => {
-  const workDir = "/tmp/job_" + uuidv4().substring(0, 8);
-  fs.mkdirSync(workDir, { recursive: true });
-  try {
-    let videoPath;
-    if (req.file) {
-      videoPath = req.file.path;
-      log("Video recebido via upload");
-    } else if (req.body && req.body.video_url) {
-      videoPath = path.join(workDir, "input.mp4");
-      log("Baixando video: " + req.body.video_url);
-      await downloadFile(req.body.video_url, videoPath);
-    } else {
-      return res.status(400).json({ error: "Envie video_url no body ou arquivo via multipart" });
+  // SFX: cada PNG tem seu próprio INPUT e OUTPUT sincronizados
+  pngTimings.forEach((t, i) => {
+    if (sfxInIdx >= 0) {
+      const dIn = Math.round(parseFloat(t.st) * 1000);
+      afilters.push("[" + sfxInIdx + ":a]adelay=" + dIn + "|" + dIn + ",volume=0.8[sin" + i + "]");
+      amix += "[sin" + i + "]";
+      amixN++;
     }
-
-    log("Baixando assets do R2...");
-    const musicPath = path.join(workDir, "music.mp3");
-    const sfxInPath = path.join(workDir, "sfx_in.mp3");
-    const sfxOutPath = path.join(workDir, "sfx_out.mp3");
-    let assets = { music: null, sfxIn: null, sfxOut: null, pngs: [] };
-
-    try { await downloadFromR2("assets/musicas/LAST_HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX entrada OK"); } catch(e) { log("SFX entrada nao encontrado: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX saida OK"); } catch(e) { log("SFX saida nao encontrado: " + e.message); }
-
-    try {
-      const pngKeys = await listAllPngs("assets/ilustracoes/");
-      log("PNGs encontrados no R2: " + pngKeys.length);
-      for (const key of pngKeys) {
-        const fname = key.replace(/\//g, "_");
-        const pp = path.join(workDir, fname);
-        try { await downloadFromR2(key, pp); assets.pngs.push(pp); } catch(e) {}
-      }
-      log("PNGs baixados: " + assets.pngs.length);
-    } catch(e) { log("Erro listando PNGs: " + e.message); }
-
-    if (!assets.music) {
-      const sil = path.join(workDir, "silence.mp3");
-      run('ffmpeg -y -f lavfi -i anullsrc=r=44100:cl=stereo -t 120 "' + sil + '"');
-      assets.music = sil;
-    }
-
-    const outputPath = await montarVideo(videoPath, workDir, assets);
-    const r2Key = "videos/" + uuidv4() + ".mp4";
-    const publicUrl = await uploadToR2(outputPath, r2Key);
-    fs.rmSync(workDir, { recursive: true, force: true });
-    res.json({ success: true, url: publicUrl, r2_key: r2Key });
-  } catch(err) {
-    log("ERRO: " + err.message);
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch(_) {}
-    res.status(500).json({ error: err.message });
-  }
-});
-
-app.get("/health", (req, res) => res.json({ status: "ok" }));
-app.get("/ffmpeg", (req, res) => {
-  try { res.json({ ffmpeg: execSync("ffmpeg -version").toString().split("\n")[0] }); }
-  catch(e) { res.status(500).json({ error: "FFmpeg nao encontrado" }); }
-});
-
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log("Servico rodando na porta " + PORT));
+    if (sfxOutIdx >= 0) {
+      const dOut = Math.round(parseFloat(t.et) * 1000);
+      afilters.push("[" + sfxOutIdx + ":a]adelay
