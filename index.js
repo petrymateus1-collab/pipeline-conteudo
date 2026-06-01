@@ -23,12 +23,7 @@ const BUCKET = "pipeline-conteudo";
 const R2_PUBLIC = "https://pub-4f2d74fa9c7c4f0089849a2be3a4f517.r2.dev";
 
 function log(msg) { console.log("[" + new Date().toISOString() + "] " + msg); }
-
-function run(cmd) {
-  log("CMD: " + cmd.substring(0, 120));
-  return execSync(cmd, { stdio: "pipe" }).toString();
-}
-
+function run(cmd) { log("CMD: " + cmd.substring(0, 120)); return execSync(cmd, { stdio: "pipe" }).toString(); }
 function randomBetween(min, max) { return Math.random() * (max - min) + min; }
 
 async function downloadFile(url, destPath) {
@@ -68,34 +63,23 @@ function hasVideoStream(f) {
   } catch(e) { return false; }
 }
 
-async function listAllPngs(prefix) {
-  let keys = [];
-  let token = undefined;
-  do {
-    const params = { Bucket: BUCKET, Prefix: prefix };
-    if (token) params.ContinuationToken = token;
-    const r = await R2.send(new ListObjectsV2Command(params));
-    if (r.Contents) {
-      for (const obj of r.Contents) {
-        if (obj.Key.match(/\.(png|PNG)$/)) keys.push(obj.Key);
-      }
-    }
-    token = r.IsTruncated ? r.NextContinuationToken : undefined;
-  } while (token);
-  return keys;
-}
-
-function transcreverAudio(audioPath) {
+function transcreverAudio(audioPath, workDir) {
   try {
-    log("Transcrevendo audio com Whisper...");
+    log("Transcrevendo com Whisper tiny...");
     const result = spawnSync("/opt/venv/bin/whisper", [
       audioPath,
-      "--model", "small",
+      "--model", "tiny",
       "--language", "en",
       "--output_format", "json",
-      "--output_dir", path.dirname(audioPath)
-    ], { encoding: "utf8", timeout: 120000 });
-    const jsonPath = audioPath.replace(/\.[^.]+$/, ".json");
+      "--output_dir", workDir,
+      "--fp16", "False"
+    ], { encoding: "utf8", timeout: 180000, maxBuffer: 50 * 1024 * 1024 });
+    if (result.status !== 0) {
+      log("Whisper erro: " + (result.stderr || "").substring(0, 200));
+      return null;
+    }
+    const base = path.basename(audioPath, path.extname(audioPath));
+    const jsonPath = path.join(workDir, base + ".json");
     if (fs.existsSync(jsonPath)) {
       const data = JSON.parse(fs.readFileSync(jsonPath, "utf8"));
       log("Transcricao OK: " + data.segments.length + " segmentos");
@@ -106,16 +90,23 @@ function transcreverAudio(audioPath) {
 }
 
 const CTA_WORDS = {
-  follow: ["follow", "follows", "following", "follower", "subscribe", "join", "connect"],
-  like: ["like", "likes", "liked", "love", "heart", "tap", "double tap"],
-  comment: ["comment", "comments", "reply", "replies", "respond", "tell", "write", "type"],
-  link: ["link", "bio", "click", "check", "visit", "go to", "swipe", "below", "description"]
+  follow: ["follow", "following", "follower", "subscribe", "join"],
+  like: ["like", "likes", "love", "heart", "tap"],
+  comment: ["comment", "reply", "respond", "write", "type"],
+  link: ["link", "bio", "click", "visit", "swipe", "below"]
 };
 
-const CTA_POSITIONS = {
-  follow:  { x: "w-120", y: "h-100" },
-  like:    { x: "w-60",  y: "h*0.85" },
-  comment: { x: "w-60",  y: "h*0.78" },
+const CTA_TEXT = {
+  follow: "TAP FOLLOW ->",
+  like: "TAP LIKE ->",
+  comment: "COMMENT BELOW",
+  link: "LINK IN BIO v"
+};
+
+const CTA_POS = {
+  follow:  { x: "w-200", y: "h-180" },
+  like:    { x: "w-120", y: "h*0.82" },
+  comment: { x: "w-120", y: "h*0.75" },
   link:    { x: "(w-tw)/2", y: "h-80" }
 };
 
@@ -123,45 +114,51 @@ function detectarCTAs(transcricao) {
   if (!transcricao || !transcricao.segments) return [];
   const ctas = [];
   for (const seg of transcricao.segments) {
-    if (!seg.words) continue;
-    for (const word of seg.words) {
-      const w = word.word.toLowerCase().replace(/[^a-z ]/g, "").trim();
-      for (const [tipo, palavras] of Object.entries(CTA_WORDS)) {
-        if (palavras.some(p => w.includes(p))) {
-          ctas.push({ tipo, start: word.start, end: word.end || word.start + 1.5 });
+    const words = seg.words || [];
+    for (const word of words) {
+      const w = (word.word || "").toLowerCase().replace(/[^a-z]/g, "");
+      for (const [tipo, lista] of Object.entries(CTA_WORDS)) {
+        if (lista.includes(w)) {
+          ctas.push({ tipo, start: word.start || seg.start, end: (word.end || seg.end) + 2 });
           break;
         }
       }
     }
   }
-  log("CTAs detectados: " + ctas.length);
+  log("CTAs: " + ctas.length);
   return ctas;
 }
 
-function gerarLegendas(transcricao, durTotal) {
-  if (!transcricao || !transcricao.segments) return "";
-  const PALAVRAS_POR_LINHA = 5;
-  const MAX_LINHAS = 3;
-  let drawtext = "";
-  for (const seg of transcricao.segments) {
-    const palavras = seg.text.trim().split(" ").filter(Boolean);
-    const chunks = [];
-    for (let i = 0; i < palavras.length; i += PALAVRAS_POR_LINHA * MAX_LINHAS) {
-      chunks.push(palavras.slice(i, i + PALAVRAS_POR_LINHA * MAX_LINHAS).join(" "));
+function gerarVF(transcricao, ctas) {
+  let vf = "format=yuv420p";
+  const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
+
+  if (transcricao && transcricao.segments) {
+    for (const seg of transcricao.segments) {
+      const texto = (seg.text || "").trim()
+        .replace(/\\/g, "")
+        .replace(/'/g, "\u2019")
+        .replace(/:/g, "\\:")
+        .replace(/,/g, "\\,")
+        .replace(/\[/g, "\\[")
+        .replace(/\]/g, "\\]")
+        .substring(0, 120);
+      if (!texto) continue;
+      const st = (seg.start || 0).toFixed(2);
+      const et = (seg.end || 0).toFixed(2);
+      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=46:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.72:enable='between(t," + st + "," + et + ")'";
     }
-    const durSeg = seg.end - seg.start;
-    chunks.forEach((chunk, ci) => {
-      const st = seg.start + ci * (durSeg / chunks.length);
-      const et = seg.start + (ci + 1) * (durSeg / chunks.length);
-      const texto = chunk.replace(/'/g, "\u2019").replace(/:/g, "\\:").replace(/,/g, "\\,");
-      drawtext += ",drawtext=text='" + texto + "'" +
-        ":fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" +
-        ":fontsize=48:fontcolor=white:borderw=3:bordercolor=black" +
-        ":x=(w-text_w)/2:y=h*0.72" +
-        ":enable='between(t," + st.toFixed(2) + "," + et.toFixed(2) + ")'";
-    });
   }
-  return drawtext;
+
+  for (const cta of ctas) {
+    const texto = CTA_TEXT[cta.tipo];
+    const pos = CTA_POS[cta.tipo];
+    const st = (cta.start || 0).toFixed(2);
+    const et = (cta.end || 0).toFixed(2);
+    vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=44:fontcolor=yellow:borderw=3:bordercolor=black:x=" + pos.x + ":y=" + pos.y + ":enable='between(t," + st + "," + et + ")'";
+  }
+
+  return vf;
 }
 
 async function montarVideo(videoPath, workDir, assets) {
@@ -170,22 +167,20 @@ async function montarVideo(videoPath, workDir, assets) {
   log("Iniciando montagem job " + jobId);
 
   const normalizedPath = path.join(workDir, "norm_" + jobId + ".mp4");
-  run('ffmpeg -y -i "' + videoPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1,format=yuv420p" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + normalizedPath + '"');
+  run('ffmpeg -y -i "' + videoPath + '" -vf "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,setsar=1" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + normalizedPath + '"');
 
   if (!hasVideoStream(normalizedPath)) throw new Error("Normalizacao falhou");
 
   const durTotal = getDuration(normalizedPath);
   log("Duracao: " + durTotal + "s");
 
-  // Extrai audio para Whisper
   const audioPath = path.join(workDir, "audio_" + jobId + ".wav");
   run('ffmpeg -y -i "' + normalizedPath + '" -vn -ar 16000 -ac 1 "' + audioPath + '"');
 
-  const transcricao = transcreverAudio(audioPath);
-  const legendasFilter = gerarLegendas(transcricao, durTotal);
+  const transcricao = transcreverAudio(audioPath, workDir);
   const ctas = detectarCTAs(transcricao);
+  const vf = gerarVF(transcricao, ctas);
 
-  // Monta inputs de audio
   let inputFiles = [normalizedPath];
   if (assets.music) inputFiles.push(assets.music);
   const sfxInAvail = assets.sfxIn && fs.existsSync(assets.sfxIn);
@@ -193,51 +188,30 @@ async function montarVideo(videoPath, workDir, assets) {
   if (sfxInAvail) inputFiles.push(assets.sfxIn);
   if (sfxOutAvail) inputFiles.push(assets.sfxOut);
 
-  const vidIdx = 0;
   const musIdx = 1;
   const sfxInIdx = sfxInAvail ? 2 : -1;
   const sfxOutIdx = sfxInAvail ? (sfxOutAvail ? 3 : -1) : (sfxOutAvail ? 2 : -1);
-
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
-  // Video filter: legendas + setas CTA
-  let vf = "null";
-  vf += legendasFilter;
-
-  // Setas CTA como texto overlay
-  for (const cta of ctas) {
-    const pos = CTA_POSITIONS[cta.tipo];
-    const emoji = cta.tipo === "follow" ? "TAP FOLLOW ->" : cta.tipo === "like" ? "TAP LIKE ->" : cta.tipo === "comment" ? "COMMENT BELOW" : "LINK IN BIO";
-    const texto = emoji.replace(/'/g, "\u2019");
-    vf += ",drawtext=text='" + texto + "'" +
-      ":fontfile=/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" +
-      ":fontsize=42:fontcolor=yellow:borderw=3:bordercolor=black" +
-      ":x=" + pos.x + ":y=" + pos.y +
-      ":enable='between(t," + cta.start.toFixed(2) + "," + cta.end.toFixed(2) + ")'";
-  }
-
-  // Audio filters
   let afilters = [];
   afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
-  afilters.push("[" + vidIdx + ":a]volume=1.0[orig]");
+  afilters.push("[0:a]volume=1.0[orig]");
   let amix = "[mus][orig]";
   let amixN = 2;
 
   if (sfxInIdx >= 0) {
-    const dIn = "0";
-    afilters.push("[" + sfxInIdx + ":a]adelay=" + dIn + "|" + dIn + ",volume=0.8[sin0]");
+    afilters.push("[" + sfxInIdx + ":a]adelay=0|0,volume=0.8[sin0]");
     amix += "[sin0]";
     amixN++;
   }
   if (sfxOutIdx >= 0) {
-    const dOut = Math.round((durTotal - 1.5) * 1000);
+    const dOut = Math.round(Math.max(0, (durTotal - 1.5)) * 1000);
     afilters.push("[" + sfxOutIdx + ":a]adelay=" + dOut + "|" + dOut + ",volume=0.8[sout0]");
     amix += "[sout0]";
     amixN++;
   }
 
   afilters.push(amix + "amix=inputs=" + amixN + ":duration=first:dropout_transition=2[afinal]");
-
   const fc = afilters.join(";");
 
   run('ffmpeg -y ' + inputArgs +
@@ -260,7 +234,6 @@ app.post("/processar", upload.single("video"), async (req, res) => {
     let videoPath;
     if (req.file) {
       videoPath = req.file.path;
-      log("Video recebido via upload");
     } else if (req.body && req.body.video_url) {
       videoPath = path.join(workDir, "input.mp4");
       log("Baixando video: " + req.body.video_url);
@@ -269,15 +242,14 @@ app.post("/processar", upload.single("video"), async (req, res) => {
       return res.status(400).json({ error: "Envie video_url no body ou arquivo via multipart" });
     }
 
-    log("Baixando assets do R2...");
     const musicPath = path.join(workDir, "music.mp3");
     const sfxInPath = path.join(workDir, "sfx_in.mp3");
     const sfxOutPath = path.join(workDir, "sfx_out.mp3");
-    let assets = { music: null, sfxIn: null, sfxOut: null, pngs: [] };
+    let assets = { music: null, sfxIn: null, sfxOut: null };
 
-    try { await downloadFromR2("assets/musicas/LAST_HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX entrada OK"); } catch(e) { log("SFX entrada nao encontrado: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX saida OK"); } catch(e) { log("SFX saida nao encontrado: " + e.message); }
+    try { await downloadFromR2("assets/musicas/LAST_HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada"); }
+    try { await downloadFromR2("assets/efeitos-sonoros/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX in OK"); } catch(e) { log("SFX in nao encontrado"); }
+    try { await downloadFromR2("assets/efeitos-sonoros/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX out OK"); } catch(e) { log("SFX out nao encontrado"); }
 
     if (!assets.music) {
       const sil = path.join(workDir, "silence.mp3");
