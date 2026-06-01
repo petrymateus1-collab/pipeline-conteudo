@@ -123,32 +123,63 @@ function detectarCTAs(transcricao) {
   return ctas;
 }
 
+function quebrarLinhas(texto, maxChars) {
+  const palavras = texto.split(" ");
+  const linhas = [];
+  let linha = "";
+  for (const p of palavras) {
+    if ((linha + " " + p).trim().length <= maxChars) {
+      linha = (linha + " " + p).trim();
+    } else {
+      if (linha) linhas.push(linha);
+      linha = p;
+    }
+  }
+  if (linha) linhas.push(linha);
+  return linhas.slice(0, 3);
+}
+
+function escaparFFmpeg(texto) {
+  return texto
+    .replace(/\\/g, "")
+    .replace(/'/g, "\u2019")
+    .replace(/:/g, "\\:")
+    .replace(/,/g, "\\,")
+    .replace(/\[/g, "\\[")
+    .replace(/\]/g, "\\]")
+    .replace(/%/g, "\\%");
+}
+
 function gerarVF(transcricao, ctas) {
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
   let vf = "format=yuv420p";
+  const lh = 48;
+
   if (transcricao && transcricao.segments) {
     for (const seg of transcricao.segments) {
-      const texto = (seg.text || "").trim()
-        .replace(/\\/g, "")
-        .replace(/'/g, "\u2019")
-        .replace(/:/g, "\\:")
-        .replace(/,/g, "\\,")
-        .replace(/\[/g, "\\[")
-        .replace(/\]/g, "\\]")
-        .substring(0, 100);
-      if (!texto) continue;
+      const textoRaw = (seg.text || "").trim().substring(0, 120);
+      if (!textoRaw) continue;
+      const linhas = quebrarLinhas(textoRaw, 28);
+      const totalAltura = linhas.length * lh;
+      const yBase = "(h/2)-(" + totalAltura + "/2)";
       const st = seg.start.toFixed(2);
       const et = seg.end.toFixed(2);
-      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=38:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h*0.78:enable='between(t," + st + "," + et + ")'";
+      linhas.forEach((linha, i) => {
+        const texto = escaparFFmpeg(linha);
+        const y = "(" + yBase + ")+" + (i * lh);
+        vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=" + y + ":enable='between(t," + st + "," + et + ")'";
+      });
     }
   }
+
   for (const cta of ctas) {
-    const texto = CTA_TEXT[cta.tipo];
+    const texto = escaparFFmpeg(CTA_TEXT[cta.tipo]);
     const pos = CTA_POS[cta.tipo];
     const st = cta.start.toFixed(2);
     const et = cta.end.toFixed(2);
     vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=44:fontcolor=yellow:borderw=3:bordercolor=black:x=" + pos.x + ":y=" + pos.y + ":enable='between(t," + st + "," + et + ")'";
   }
+
   return vf;
 }
 
@@ -177,8 +208,8 @@ async function montarVideo(videoPath, workDir, assets) {
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
   let afilters = [];
-  afilters.push("[1:a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
-  afilters.push("[0:a]volume=1.8[orig]");
+  afilters.push("[1:a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.08,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
+  afilters.push("[0:a]volume=2.5[orig]");
   afilters.push("[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]");
   const fc = afilters.join(";");
 
