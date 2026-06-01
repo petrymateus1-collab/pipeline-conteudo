@@ -93,18 +93,11 @@ const CTA_WORDS = {
   link: ["link", "bio", "click", "visit", "swipe", "below"]
 };
 
-const CTA_TEXT = {
-  follow: "TAP FOLLOW ->",
-  like: "TAP LIKE ->",
-  comment: "COMMENT BELOW",
-  link: "LINK IN BIO v"
-};
-
 const CTA_POS = {
-  follow:  { x: "w-220", y: "h-180" },
-  like:    { x: "w-130", y: "h*0.82" },
-  comment: { x: "w-130", y: "h*0.75" },
-  link:    { x: "(w-tw)/2", y: "h-80" }
+  follow:  { x: "w-200", y: "h-220" },
+  like:    { x: "w-160", y: "h*0.80" },
+  comment: { x: "w-160", y: "h*0.73" },
+  link:    { x: "(w/2)-80", y: "h-120" }
 };
 
 function detectarCTAs(transcricao) {
@@ -172,14 +165,6 @@ function gerarVF(transcricao, ctas) {
     }
   }
 
-  for (const cta of ctas) {
-    const texto = escaparFFmpeg(CTA_TEXT[cta.tipo]);
-    const pos = CTA_POS[cta.tipo];
-    const st = cta.start.toFixed(2);
-    const et = cta.end.toFixed(2);
-    vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=44:fontcolor=yellow:borderw=3:bordercolor=black:x=" + pos.x + ":y=" + pos.y + ":enable='between(t," + st + "," + et + ")'";
-  }
-
   return vf;
 }
 
@@ -203,17 +188,67 @@ async function montarVideo(videoPath, workDir, assets) {
   const ctas = detectarCTAs(transcricao);
   const vf = gerarVF(transcricao, ctas);
 
+  // Baixa seta do R2
+  const setaPath = path.join(workDir, "seta_cta.png");
+  let setaDisponivel = false;
+  try {
+    await downloadFromR2("assets/STICKERS/seta_cta.png", setaPath);
+    setaDisponivel = true;
+    log("Seta CTA OK");
+  } catch(e) { log("Seta nao encontrada: " + e.message); }
+
+  // Monta inputs
   let inputFiles = [normalizedPath];
   if (assets.music) inputFiles.push(assets.music);
+  if (setaDisponivel && ctas.length > 0) inputFiles.push(setaPath);
+
+  const musIdx = 1;
+  const setaIdx = (setaDisponivel && ctas.length > 0) ? inputFiles.length - 1 : -1;
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
+  // Filter complex para audio
   let afilters = [];
-  afilters.push("[1:a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.08,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
+  afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
   afilters.push("[0:a]volume=2.5[orig]");
   afilters.push("[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]");
   const fc = afilters.join(";");
 
-  run('ffmpeg -y ' + inputArgs + ' -filter_complex "' + fc + '" -map "0:v" -vf "' + vf + '" -map "[afinal]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
+  // Monta filter_complex com overlay da seta para cada CTA
+  let fcVideo = "";
+  let lastLabel = "vbase";
+
+  if (setaIdx >= 0 && ctas.length > 0) {
+    // Escala a seta para 160x160
+    fcVideo = "[" + setaIdx + ":v]scale=160:160[seta_scaled];";
+    fcVideo += "[0:v]" + vf + "[vbase];";
+    ctas.forEach((cta, i) => {
+      const pos = CTA_POS[cta.tipo];
+      const st = cta.start.toFixed(2);
+      const et = cta.end.toFixed(2);
+      const inLabel = i === 0 ? "vbase" : "vout" + (i - 1);
+      const outLabel = i === ctas.length - 1 ? "vfinal" : "vout" + i;
+      fcVideo += "[" + inLabel + "][seta_scaled]overlay=" + pos.x + ":" + pos.y + ":enable='between(t," + st + "," + et + ")'[" + outLabel + "];";
+    });
+    fcVideo += "[afinal]";
+
+    run('ffmpeg -y ' + inputArgs +
+      ' -filter_complex "' + fcVideo + fc + '"' +
+      ' -map "[vfinal]"' +
+      ' -map "[afinal]"' +
+      ' -c:v libx264 -preset fast -crf 23' +
+      ' -c:a aac -b:a 128k -ar 44100' +
+      ' -t ' + durTotal +
+      ' "' + outputPath + '"');
+  } else {
+    run('ffmpeg -y ' + inputArgs +
+      ' -filter_complex "' + fc + '"' +
+      ' -map "0:v" -vf "' + vf + '"' +
+      ' -map "[afinal]"' +
+      ' -c:v libx264 -preset fast -crf 23' +
+      ' -c:a aac -b:a 128k -ar 44100' +
+      ' -t ' + durTotal +
+      ' "' + outputPath + '"');
+  }
 
   log("Video montado: " + outputPath);
   return outputPath;
