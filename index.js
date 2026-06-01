@@ -94,10 +94,10 @@ const CTA_WORDS = {
 };
 
 const CTA_POS = {
-  follow:  { x: "w-170", y: "h-200" },
-  like:    { x: "w-170", y: "h*0.60" },
-  comment: { x: "w-170", y: "h*0.65" },
-  link:    { x: "w-170", y: "h-200" }
+  follow:  { x: "560", y: "1050" },
+  like:    { x: "560", y: "720" },
+  comment: { x: "560", y: "780" },
+  link:    { x: "280", y: "1100" }
 };
 
 function detectarCTAs(transcricao) {
