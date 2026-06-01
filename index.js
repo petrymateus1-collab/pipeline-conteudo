@@ -94,10 +94,10 @@ const CTA_WORDS = {
 };
 
 const CTA_POS = {
-  follow:  { x: "W-200", y: "H-220" },
-  like:    { x: "W-160", y: "H*0.80" },
-  comment: { x: "W-160", y: "H*0.73" },
-  link:    { x: "(W/2)-80", y: "H-120" }
+  follow:  { x: "w-200", y: "h-220" },
+  like:    { x: "w-160", y: "h*0.80" },
+  comment: { x: "w-160", y: "h*0.73" },
+  link:    { x: "(w/2)-80", y: "h-120" }
 };
 
 function detectarCTAs(transcricao) {
@@ -188,7 +188,6 @@ async function montarVideo(videoPath, workDir, assets) {
   const ctas = detectarCTAs(transcricao);
   const vf = gerarVF(transcricao);
 
-  // Baixa seta
   const setaPath = path.join(workDir, "seta_cta.png");
   let setaDisponivel = false;
   try {
@@ -197,31 +196,27 @@ async function montarVideo(videoPath, workDir, assets) {
     log("Seta OK");
   } catch(e) { log("Seta nao encontrada"); }
 
-  // Step 1: renderiza video com legendas
+  // Step 1: legendas
   const vidLegPath = path.join(workDir, "vid_leg_" + jobId + ".mp4");
   run('ffmpeg -y -i "' + normalizedPath + '" -vf "' + vf + '" -c:v libx264 -preset fast -crf 23 -c:a copy "' + vidLegPath + '"');
 
-  // Step 2: adiciona seta CTA se disponivel
+  // Step 2: seta CTA — cada CTA vira um passo separado
   let vidCtaPath = vidLegPath;
   if (setaDisponivel && ctas.length > 0) {
-    vidCtaPath = path.join(workDir, "vid_cta_" + jobId + ".mp4");
-    let setaFilter = "[1:v]scale=160:160[seta];";
-    let lastLabel = "0:v";
+    let currentInput = vidLegPath;
     ctas.forEach((cta, i) => {
       const pos = CTA_POS[cta.tipo];
       const st = cta.start.toFixed(2);
       const et = cta.end.toFixed(2);
-      const x = pos.x.replace(/W/g, "w").replace(/H/g, "h");
-      const y = pos.y.replace(/W/g, "w").replace(/H/g, "h");
-      const inLabel = i === 0 ? "0:v" : "vout" + (i - 1);
-      const outLabel = i === ctas.length - 1 ? "vfinal" : "vout" + i;
-      setaFilter += "[" + inLabel + "][seta]overlay=" + x + ":" + y + ":enable='between(t," + st + "," + et + ")'[" + outLabel + "];";
+      const nextPath = path.join(workDir, "vid_cta_" + i + "_" + jobId + ".mp4");
+      const fc = "[1:v]scale=160:160[s];[0:v][s]overlay=" + pos.x + ":" + pos.y + ":enable='between(t," + st + "," + et + ")'[v]";
+      run('ffmpeg -y -i "' + currentInput + '" -i "' + setaPath + '" -filter_complex "' + fc + '" -map "[v]" -map "0:a" -c:v libx264 -preset fast -crf 23 -c:a copy "' + nextPath + '"');
+      currentInput = nextPath;
     });
-    setaFilter = setaFilter.replace(/;$/, "");
-    run('ffmpeg -y -i "' + vidLegPath + '" -i "' + setaPath + '" -filter_complex "' + setaFilter + '" -map "[vfinal]" -map "0:a" -c:v libx264 -preset fast -crf 23 -c:a copy "' + vidCtaPath + '"');
+    vidCtaPath = path.join(workDir, "vid_cta_" + (ctas.length - 1) + "_" + jobId + ".mp4");
   }
 
-  // Step 3: adiciona musica
+  // Step 3: musica
   run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + assets.music + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
