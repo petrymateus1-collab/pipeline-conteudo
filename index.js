@@ -94,10 +94,10 @@ const CTA_WORDS = {
 };
 
 const CTA_POS = {
-  follow:  { x: "w-200", y: "h-220" },
-  like:    { x: "w-160", y: "h*0.80" },
-  comment: { x: "w-160", y: "h*0.73" },
-  link:    { x: "(w/2)-80", y: "h-120" }
+  follow:  { x: "W-200", y: "H-220" },
+  like:    { x: "W-160", y: "H*0.80" },
+  comment: { x: "W-160", y: "H*0.73" },
+  link:    { x: "(W/2)-80", y: "H-120" }
 };
 
 function detectarCTAs(transcricao) {
@@ -143,7 +143,7 @@ function escaparFFmpeg(texto) {
     .replace(/%/g, "\\%");
 }
 
-function gerarVF(transcricao, ctas) {
+function gerarVF(transcricao) {
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
   let vf = "format=yuv420p";
   const lh = 48;
@@ -186,69 +186,43 @@ async function montarVideo(videoPath, workDir, assets) {
 
   const transcricao = await transcreverOpenAI(audioPath);
   const ctas = detectarCTAs(transcricao);
-  const vf = gerarVF(transcricao, ctas);
+  const vf = gerarVF(transcricao);
 
-  // Baixa seta do R2
+  // Baixa seta
   const setaPath = path.join(workDir, "seta_cta.png");
   let setaDisponivel = false;
   try {
     await downloadFromR2("assets/STICKERS/seta_cta.png", setaPath);
     setaDisponivel = true;
-    log("Seta CTA OK");
-  } catch(e) { log("Seta nao encontrada: " + e.message); }
+    log("Seta OK");
+  } catch(e) { log("Seta nao encontrada"); }
 
-  // Monta inputs
-  let inputFiles = [normalizedPath];
-  if (assets.music) inputFiles.push(assets.music);
-  if (setaDisponivel && ctas.length > 0) inputFiles.push(setaPath);
+  // Step 1: renderiza video com legendas
+  const vidLegPath = path.join(workDir, "vid_leg_" + jobId + ".mp4");
+  run('ffmpeg -y -i "' + normalizedPath + '" -vf "' + vf + '" -c:v libx264 -preset fast -crf 23 -c:a copy "' + vidLegPath + '"');
 
-  const musIdx = 1;
-  const setaIdx = (setaDisponivel && ctas.length > 0) ? inputFiles.length - 1 : -1;
-  const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
-
-  // Filter complex para audio
-  let afilters = [];
-  afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
-  afilters.push("[0:a]volume=2.5[orig]");
-  afilters.push("[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]");
-  const fc = afilters.join(";");
-
-  // Monta filter_complex com overlay da seta para cada CTA
-  let fcVideo = "";
-  let lastLabel = "vbase";
-
-  if (setaIdx >= 0 && ctas.length > 0) {
-    // Escala a seta para 160x160
-    fcVideo = "[" + setaIdx + ":v]scale=160:160[seta_scaled];";
-    fcVideo += "[0:v]" + vf + "[vbase];";
+  // Step 2: adiciona seta CTA se disponivel
+  let vidCtaPath = vidLegPath;
+  if (setaDisponivel && ctas.length > 0) {
+    vidCtaPath = path.join(workDir, "vid_cta_" + jobId + ".mp4");
+    let setaFilter = "[1:v]scale=160:160[seta];";
+    let lastLabel = "0:v";
     ctas.forEach((cta, i) => {
       const pos = CTA_POS[cta.tipo];
       const st = cta.start.toFixed(2);
       const et = cta.end.toFixed(2);
-      const inLabel = i === 0 ? "vbase" : "vout" + (i - 1);
+      const x = pos.x.replace(/W/g, "w").replace(/H/g, "h");
+      const y = pos.y.replace(/W/g, "w").replace(/H/g, "h");
+      const inLabel = i === 0 ? "0:v" : "vout" + (i - 1);
       const outLabel = i === ctas.length - 1 ? "vfinal" : "vout" + i;
-      fcVideo += "[" + inLabel + "][seta_scaled]overlay=" + pos.x + ":" + pos.y + ":enable='between(t," + st + "," + et + ")'[" + outLabel + "];";
+      setaFilter += "[" + inLabel + "][seta]overlay=" + x + ":" + y + ":enable='between(t," + st + "," + et + ")'[" + outLabel + "];";
     });
-    fcVideo += "[afinal]";
-
-    run('ffmpeg -y ' + inputArgs +
-      ' -filter_complex "' + fcVideo + fc + '"' +
-      ' -map "[vfinal]"' +
-      ' -map "[afinal]"' +
-      ' -c:v libx264 -preset fast -crf 23' +
-      ' -c:a aac -b:a 128k -ar 44100' +
-      ' -t ' + durTotal +
-      ' "' + outputPath + '"');
-  } else {
-    run('ffmpeg -y ' + inputArgs +
-      ' -filter_complex "' + fc + '"' +
-      ' -map "0:v" -vf "' + vf + '"' +
-      ' -map "[afinal]"' +
-      ' -c:v libx264 -preset fast -crf 23' +
-      ' -c:a aac -b:a 128k -ar 44100' +
-      ' -t ' + durTotal +
-      ' "' + outputPath + '"');
+    setaFilter = setaFilter.replace(/;$/, "");
+    run('ffmpeg -y -i "' + vidLegPath + '" -i "' + setaPath + '" -filter_complex "' + setaFilter + '" -map "[vfinal]" -map "0:a" -c:v libx264 -preset fast -crf 23 -c:a copy "' + vidCtaPath + '"');
   }
+
+  // Step 3: adiciona musica
+  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + assets.music + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
   return outputPath;
