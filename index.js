@@ -63,6 +63,23 @@ function hasVideoStream(f) {
   } catch(e) { return false; }
 }
 
+async function listAllPngs(prefix) {
+  let keys = [];
+  let token = undefined;
+  do {
+    const params = { Bucket: BUCKET, Prefix: prefix };
+    if (token) params.ContinuationToken = token;
+    const r = await R2.send(new ListObjectsV2Command(params));
+    if (r.Contents) {
+      for (const obj of r.Contents) {
+        if (obj.Key.match(/\.(png|PNG)$/)) keys.push(obj.Key);
+      }
+    }
+    token = r.IsTruncated ? r.NextContinuationToken : undefined;
+  } while (token);
+  return keys;
+}
+
 async function montarVideo(videoPath, workDir, assets) {
   const jobId = uuidv4().substring(0, 8);
   const outputPath = path.join(workDir, "output_" + jobId + ".mp4");
@@ -86,9 +103,9 @@ async function montarVideo(videoPath, workDir, assets) {
 
   const vidIdx = 0;
   const musIdx = 1;
-  const sfxInIdx = assets.sfxIn && fs.existsSync(assets.sfxIn) ? 2 : -1;
-  const sfxOutIdx = sfxInIdx >= 0 ? 3 : (assets.sfxOut && fs.existsSync(assets.sfxOut) ? 2 : -1);
-  const pngStartIdx = inputFiles.indexOf(pngs[0]);
+  const sfxInIdx = (assets.sfxIn && fs.existsSync(assets.sfxIn)) ? 2 : -1;
+  const sfxOutIdx = sfxInIdx >= 0 ? ((assets.sfxOut && fs.existsSync(assets.sfxOut)) ? 3 : -1) : ((assets.sfxOut && fs.existsSync(assets.sfxOut)) ? 2 : -1);
+  const pngStartIdx = pngs.length > 0 ? inputFiles.indexOf(pngs[0]) : -1;
 
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
@@ -155,22 +172,19 @@ app.post("/processar", upload.single("video"), async (req, res) => {
     const sfxOutPath = path.join(workDir, "sfx_out.mp3");
     let assets = { music: null, sfxIn: null, sfxOut: null, pngs: [] };
 
-    try { await downloadFromR2("assets/musicas/LAST HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/transicao/INPUT.MP3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX entrada OK"); } catch(e) { log("SFX entrada nao encontrado: " + e.message); }
-    try { await downloadFromR2("assets/efeitos-sonoros/transicao/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX saida OK"); } catch(e) { log("SFX saida nao encontrado: " + e.message); }
+    try { await downloadFromR2("assets/musicas/LAST_HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada: " + e.message); }
+    try { await downloadFromR2("assets/efeitos-sonoros/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX entrada OK"); } catch(e) { log("SFX entrada nao encontrado: " + e.message); }
+    try { await downloadFromR2("assets/efeitos-sonoros/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX saida OK"); } catch(e) { log("SFX saida nao encontrado: " + e.message); }
 
     try {
-      const r2List = await R2.send(new ListObjectsV2Command({ Bucket: BUCKET, Prefix: "assets/ilustracoes/" }));
-      if (r2List.Contents) {
-        for (const obj of r2List.Contents) {
-          if (obj.Key.match(/\.(png|PNG)$/)) {
-            const fname = path.basename(obj.Key);
-            const pp = path.join(workDir, fname);
-            try { await downloadFromR2(obj.Key, pp); assets.pngs.push(pp); } catch(e) {}
-          }
-        }
+      const pngKeys = await listAllPngs("assets/ilustracoes/");
+      log("PNGs encontrados no R2: " + pngKeys.length);
+      for (const key of pngKeys) {
+        const fname = key.replace(/\//g, "_");
+        const pp = path.join(workDir, fname);
+        try { await downloadFromR2(key, pp); assets.pngs.push(pp); } catch(e) {}
       }
-      log("PNGs carregados: " + assets.pngs.length);
+      log("PNGs baixados: " + assets.pngs.length);
     } catch(e) { log("Erro listando PNGs: " + e.message); }
 
     if (!assets.music) {
