@@ -139,7 +139,7 @@ function gerarVF(transcricao, ctas) {
       if (!texto) continue;
       const st = seg.start.toFixed(2);
       const et = seg.end.toFixed(2);
-      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=46:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=h*0.72:enable='between(t," + st + "," + et + ")'";
+      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=38:fontcolor=white:borderw=2:bordercolor=black:x=(w-tw)/2:y=h*0.78:enable='between(t," + st + "," + et + ")'";
     }
   }
   for (const cta of ctas) {
@@ -174,24 +174,12 @@ async function montarVideo(videoPath, workDir, assets) {
 
   let inputFiles = [normalizedPath];
   if (assets.music) inputFiles.push(assets.music);
-  const sfxInAvail = assets.sfxIn && fs.existsSync(assets.sfxIn);
-  const sfxOutAvail = assets.sfxOut && fs.existsSync(assets.sfxOut);
-  if (sfxInAvail) inputFiles.push(assets.sfxIn);
-  if (sfxOutAvail) inputFiles.push(assets.sfxOut);
-
-  const musIdx = 1;
-  const sfxInIdx = sfxInAvail ? 2 : -1;
-  const sfxOutIdx = sfxInAvail ? (sfxOutAvail ? 3 : -1) : (sfxOutAvail ? 2 : -1);
   const inputArgs = inputFiles.map(f => '-i "' + f + '"').join(" ");
 
   let afilters = [];
-  afilters.push("[" + musIdx + ":a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
-  afilters.push("[0:a]volume=1.0[orig]");
-  let amix = "[mus][orig]";
-  let amixN = 2;
-  if (sfxInIdx >= 0) { afilters.push("[" + sfxInIdx + ":a]adelay=0|0,volume=0.8[sin0]"); amix += "[sin0]"; amixN++; }
-  if (sfxOutIdx >= 0) { const dOut = Math.round(Math.max(0, (durTotal - 1.5)) * 1000); afilters.push("[" + sfxOutIdx + ":a]adelay=" + dOut + "|" + dOut + ",volume=0.8[sout0]"); amix += "[sout0]"; amixN++; }
-  afilters.push(amix + "amix=inputs=" + amixN + ":duration=first:dropout_transition=2[afinal]");
+  afilters.push("[1:a]atrim=0:" + durTotal + ",asetpts=PTS-STARTPTS,volume=0.15,afade=t=out:st=" + (durTotal - 2).toFixed(2) + ":d=2[mus]");
+  afilters.push("[0:a]volume=1.8[orig]");
+  afilters.push("[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]");
   const fc = afilters.join(";");
 
   run('ffmpeg -y ' + inputArgs + ' -filter_complex "' + fc + '" -map "0:v" -vf "' + vf + '" -map "[afinal]" -c:v libx264 -preset fast -crf 23 -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
@@ -216,13 +204,9 @@ app.post("/processar", upload.single("video"), async (req, res) => {
     }
 
     const musicPath = path.join(workDir, "music.mp3");
-    const sfxInPath = path.join(workDir, "sfx_in.mp3");
-    const sfxOutPath = path.join(workDir, "sfx_out.mp3");
-    let assets = { music: null, sfxIn: null, sfxOut: null };
+    let assets = { music: null };
 
     try { await downloadFromR2("assets/musicas/LAST_HOPE.mp3", musicPath); assets.music = musicPath; log("Musica OK"); } catch(e) { log("Musica nao encontrada"); }
-    try { await downloadFromR2("assets/efeitos-sonoros/INPUT.mp3", sfxInPath); assets.sfxIn = sfxInPath; log("SFX in OK"); } catch(e) { log("SFX in nao encontrado"); }
-    try { await downloadFromR2("assets/efeitos-sonoros/OUTPUT.mp3", sfxOutPath); assets.sfxOut = sfxOutPath; log("SFX out OK"); } catch(e) { log("SFX out nao encontrado"); }
 
     if (!assets.music) {
       const sil = path.join(workDir, "silence.mp3");
