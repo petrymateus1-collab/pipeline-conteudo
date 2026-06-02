@@ -114,7 +114,7 @@ Se uma fase não existir no vídeo, use os timestamps mais próximos do padrão 
       timeout: 30000
     });
 
-    const content = response.data.choices[0].message.content.trim();
+    const content = response.data.choices[0].message.content.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
     const fases = JSON.parse(content);
     log("Fases classificadas: " + JSON.stringify(fases));
     return fases;
