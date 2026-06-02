@@ -271,40 +271,26 @@ async function montarVideo(videoPath, workDir, assets) {
     vidCtaPath = path.join(workDir, "vid_cta_" + (ctas.length - 1) + "_" + jobId + ".mp4");
   }
 
-  // Step 3: musica por fase
+  // Step 3: musica com volume por fase
   let musicaFinal = assets.music;
-  if (fases && trilhas) {
+  if (fases) {
     try {
+      const volPorFase = { hook: 0.12, participacao: 0.18, body: 0.22, reframe: 0.28, cta: 0.20 };
       const fasesOrdem = ["hook", "participacao", "body", "reframe", "cta"];
-      const fasesValidas = fasesOrdem.filter(fase => fases[fase]);
-      const chunks = [];
-
-      for (let i = 0; i < fasesValidas.length; i++) {
-        const fase = fasesValidas[i];
-        const f = fases[fase];
-        const dur = Math.max(0.1, f.end - f.start);
-        const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".wav");
-       const vol = fase === 'hook' ? '0.15' : '0.25';
-        const durMin = fase === 'reframe' ? Math.max(8, dur) : fase === 'cta' ? Math.max(8, dur) : dur;
-        const fadeOut = 'afade=t=out:st=' + Math.max(0, durMin - 1.5).toFixed(2) + ':d=1.5';
-        run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + durMin.toFixed(2) + ' -ar 44100 -ac 2 -af "volume=' + vol + ',' + fadeOut + '" -f wav "' + chunkPath + '"');
-        chunks.push(chunkPath);
+      let volumeFilter = "";
+      for (const fase of fasesOrdem) {
+        if (!fases[fase]) continue;
+        const vol = volPorFase[fase];
+        const st = fases[fase].start.toFixed(2);
+        const et = fases[fase].end.toFixed(2);
+        volumeFilter += (volumeFilter ? "," : "") + "volume=" + vol + ":enable='between(t," + st + "," + et + ")'";
       }
-
-      
-     // Crossfade entre chunks para eliminar silencio
-      let trilhaAtual = chunks[0];
-      for (let j = 1; j < chunks.length; j++) {
-        const trilhaMerge = path.join(workDir, "merge_" + j + "_" + jobId + ".wav");
-        run('ffmpeg -y -i "' + trilhaAtual + '" -i "' + chunks[j] + '" -filter_complex "[0][1]acrossfade=d=1.0:c1=tri:c2=tri[out]" -map "[out]" -ar 44100 -ac 2 "' + trilhaMerge + '"');
-        trilhaAtual = trilhaMerge;
-      }
-      musicaFinal = trilhaAtual;
-
-      
-      log("Trilha por fases montada OK");
+      const trilhaVolPath = path.join(workDir, "trilha_vol_" + jobId + ".wav");
+      run('ffmpeg -y -i "' + assets.music + '" -t ' + durTotal.toFixed(2) + ' -ar 44100 -ac 2 -af "' + volumeFilter + ',afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2" -f wav "' + trilhaVolPath + '"');
+      musicaFinal = trilhaVolPath;
+      log("Trilha volume por fase OK");
     } catch(e) {
-      log("Erro trilha por fases, usando fallback: " + e.message);
+      log("Erro trilha volume por fase, usando fallback: " + e.message);
       musicaFinal = assets.music;
     }
   }
