@@ -284,9 +284,10 @@ async function montarVideo(videoPath, workDir, assets) {
         const f = fases[fase];
         const dur = Math.max(0.1, f.end - f.start);
         const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".wav");
-        const vol = fase === 'hook' ? '0.15' : '0.25';
-        const fadeOut = 'afade=t=out:st=' + Math.max(0, dur - 0.2).toFixed(2) + ':d=0.2';
-        run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -ar 44100 -ac 2 -af "volume=' + vol + ',' + fadeOut + '" -f wav "' + chunkPath + '"');
+       const vol = fase === 'hook' ? '0.15' : '0.25';
+        const durMin = fase === 'reframe' ? Math.max(5, dur) : dur;
+        const fadeOut = 'afade=t=out:st=' + Math.max(0, durMin - 1.5).toFixed(2) + ':d=1.5';
+        run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + durMin.toFixed(2) + ' -ar 44100 -ac 2 -af "volume=' + vol + ',' + fadeOut + '" -f wav "' + chunkPath + '"');
         chunks.push(chunkPath);
       }
 
@@ -295,7 +296,7 @@ async function montarVideo(videoPath, workDir, assets) {
       let trilhaAtual = chunks[0];
       for (let j = 1; j < chunks.length; j++) {
         const trilhaMerge = path.join(workDir, "merge_" + j + "_" + jobId + ".wav");
-        run('ffmpeg -y -i "' + trilhaAtual + '" -i "' + chunks[j] + '" -filter_complex "[0][1]acrossfade=d=0.1:c1=tri:c2=tri[out]" -map "[out]" -ar 44100 -ac 2 "' + trilhaMerge + '"');
+        run('ffmpeg -y -i "' + trilhaAtual + '" -i "' + chunks[j] + '" -filter_complex "[0][1]acrossfade=d=1.0:c1=tri:c2=tri[out]" -map "[out]" -ar 44100 -ac 2 "' + trilhaMerge + '"');
         trilhaAtual = trilhaMerge;
       }
       musicaFinal = trilhaAtual;
