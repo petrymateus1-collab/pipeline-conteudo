@@ -292,10 +292,9 @@ async function montarVideo(videoPath, workDir, assets) {
 
   const transcricao = await transcreverOpenAI(audioPath);
   const ctas = detectarCTAs(transcricao);
-  const vf = gerarVF(transcricao, fases, headlines);
-
   const fases = await classificarFases(transcricao, durTotal);
   const headlines = await gerarHeadlines(transcricao, fases);
+  const vf = gerarVF(transcricao, fases, headlines);
   const trilhas = await baixarTrilhas(workDir, assets.music);
 
   const setaPath = path.join(workDir, "seta_cta.png");
