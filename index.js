@@ -265,8 +265,8 @@ function gerarVF(transcricao, fases, headlines) {
       const cor = corPorFase[fase];
       const texto = escaparFFmpeg(headlines[fase].substring(0, 40));
       // Caixa de fundo
-      vf += ",drawbox=x=(w-500)/2:y=86:w=500:h=100:color=" + cor + "@0.85:t=fill:enable='between(t," + st + "," + et + ")'";
-      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=60:fontcolor=0xFFD700:x=(w-tw)/2:y=96:enable='between(t," + st + "," + et + ")'";
+      vf += ",drawbox=x=(w-500)/2:y=86:w=500:h=72:color=" + cor + "@0.85:t=fill:enable='between(t," + st + "," + et + ")'";
+      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=42:fontcolor=0xFFD700:x=(w-tw)/2:y=96:enable='between(t," + st + "," + et + ")'";
     }
   }
 
