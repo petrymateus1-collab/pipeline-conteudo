@@ -309,7 +309,7 @@ async function montarVideo(videoPath, workDir, assets) {
     }
   }
 
-  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + musicaFinal + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
+  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + musicaFinal + '" -filter_complex "[1:a]apad,atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=0[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
   return outputPath;
