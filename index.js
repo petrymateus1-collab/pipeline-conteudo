@@ -278,26 +278,25 @@ async function montarVideo(videoPath, workDir, assets) {
 
   // Step 3: musica por fase (ou fallback musica unica)
   if (fases && trilhas) {
-    // Monta trilha concatenada por fase
     const fasesOrdem = ["hook", "participacao", "body", "reframe", "cta"];
-    let concatInputs = "";
-    let concatFilters = [];
-    let concatLabels = [];
-    let idx = 0;
-
-fasesOrdem.forEach((fase, i) => {
-  const f = fases[fase];
-  if (!f) return;
-  const dur = Math.max(0.1, f.end - f.start);
-  concatInputs += ' -i "' + trilhas[fase] + '"';
-  concatFilters.push("[" + idx + ":a]atrim=0:" + dur.toFixed(2) + ",asetpts=PTS-STARTPTS,volume=0.13[t" + i + "]");
-  concatLabels.push("[t" + i + "]");
-  idx++;
-});
-
+    const fasesValidas = fasesOrdem.filter(fase => fases[fase]);
     const trilhaPath = path.join(workDir, "trilha_final_" + jobId + ".mp3");
-    const fc2 = concatFilters.join(";") + ";" + concatLabels.join("") + "concat=n=" + concatLabels.length + ":v=0:a=1[trilha]";
-    run('ffmpeg -y' + concatInputs + ' -filter_complex "' + fc2 + '" -map "[trilha]" -c:a aac -ar 44100 "' + trilhaPath + '"');
+
+    // Concatena trilhas em arquivo unico via node (evita complexidade FFmpeg)
+    const chunks = [];
+    for (let i = 0; i < fasesValidas.length; i++) {
+      const fase = fasesValidas[i];
+      const f = fases[fase];
+      const dur = Math.max(0.1, f.end - f.start);
+      const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".mp3");
+      run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -c:a copy "' + chunkPath + '"');
+      chunks.push(chunkPath);
+    }
+
+    // Lista de arquivos para concatenar
+    const listPath = path.join(workDir, "concat_list_" + jobId + ".txt");
+    fs.writeFileSync(listPath, chunks.map(c => "file '" + c + "'").join("\n"));
+    run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -c:a aac -ar 44100 "' + trilhaPath + '"');
 
     run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + trilhaPath + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
   } else {
