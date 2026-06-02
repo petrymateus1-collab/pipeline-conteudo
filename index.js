@@ -283,17 +283,17 @@ async function montarVideo(videoPath, workDir, assets) {
     let concatInputs = "";
     let concatFilters = [];
     let concatLabels = [];
-    let idx = 1;
+    let idx = 0;
 
-    fasesOrdem.forEach((fase, i) => {
-      const f = fases[fase];
-      if (!f) return;
-      const dur = Math.max(0.1, f.end - f.start);
-      concatInputs += ' -i "' + trilhas[fase] + '"';
-      concatFilters.push("[" + idx + ":a]atrim=0:" + dur.toFixed(2) + ",asetpts=PTS-STARTPTS,volume=0.13[t" + i + "]");
-      concatLabels.push("[t" + i + "]");
-      idx++;
-    });
+fasesOrdem.forEach((fase, i) => {
+  const f = fases[fase];
+  if (!f) return;
+  const dur = Math.max(0.1, f.end - f.start);
+  concatInputs += ' -i "' + trilhas[fase] + '"';
+  concatFilters.push("[" + idx + ":a]atrim=0:" + dur.toFixed(2) + ",asetpts=PTS-STARTPTS,volume=0.13[t" + i + "]");
+  concatLabels.push("[t" + i + "]");
+  idx++;
+});
 
     const trilhaPath = path.join(workDir, "trilha_final_" + jobId + ".mp3");
     const fc2 = concatFilters.join(";") + ";" + concatLabels.join("") + "concat=n=" + concatLabels.length + ":v=0:a=1[trilha]";
