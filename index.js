@@ -263,10 +263,14 @@ function gerarVF(transcricao, fases, headlines) {
       const st = fases[fase].start.toFixed(2);
       const et = fases[fase].end.toFixed(2);
       const cor = corPorFase[fase];
-      const texto = escaparFFmpeg(headlines[fase].substring(0, 40));
-      // Caixa de fundo
-      vf += ",drawbox=x=(w-500)/2:y=86:w=500:h=72:color=" + cor + "@0.85:t=fill:enable='between(t," + st + "," + et + ")'";
-      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=42:fontcolor=0xFFD700:x=(w-tw)/2:y=96:enable='between(t," + st + "," + et + ")'";
+     const linhasHL = quebrarLinhas(headlines[fase], 22);
+      const alturaHL = linhasHL.length > 1 ? 130 : 72;
+      vf += ",drawbox=x=(w-500)/2:y=86:w=500:h=" + alturaHL + ":color=" + cor + "@0.85:t=fill:enable='between(t," + st + "," + et + ")'";
+      linhasHL.forEach((lhl, ili) => {
+        const textoHL = escaparFFmpeg(lhl);
+        const yHL = 96 + (ili * 48);
+        vf += ",drawtext=fontfile='" + font + "':text='" + textoHL + "':fontsize=42:fontcolor=0xFFD700:x=(w-tw)/2:y=" + yHL + ":enable='between(t," + st + "," + et + ")'";
+      });
     }
   }
 
