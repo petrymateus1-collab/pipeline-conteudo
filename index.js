@@ -290,11 +290,17 @@ async function montarVideo(videoPath, workDir, assets) {
         chunks.push(chunkPath);
       }
 
-      const listPath = path.join(workDir, "concat_list_" + jobId + ".txt");
-      fs.writeFileSync(listPath, chunks.map(c => "file '" + c + "'").join("\n"));
-      const trilhaPath = path.join(workDir, "trilha_final_" + jobId + ".wav");
-      run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -ar 44100 -ac 2 "' + trilhaPath + '"');
-      musicaFinal = trilhaPath;
+      
+     // Crossfade entre chunks para eliminar silencio
+      let trilhaAtual = chunks[0];
+      for (let j = 1; j < chunks.length; j++) {
+        const trilhaMerge = path.join(workDir, "merge_" + j + "_" + jobId + ".wav");
+        run('ffmpeg -y -i "' + trilhaAtual + '" -i "' + chunks[j] + '" -filter_complex "[0][1]acrossfade=d=0.1:c1=tri:c2=tri[out]" -map "[out]" -ar 44100 -ac 2 "' + trilhaMerge + '"');
+        trilhaAtual = trilhaMerge;
+      }
+      musicaFinal = trilhaAtual;
+
+      
       log("Trilha por fases montada OK");
     } catch(e) {
       log("Erro trilha por fases, usando fallback: " + e.message);
@@ -302,7 +308,7 @@ async function montarVideo(videoPath, workDir, assets) {
     }
   }
 
-  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + musicaFinal + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
+  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + musicaFinal + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
   return outputPath;
