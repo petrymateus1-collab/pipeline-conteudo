@@ -289,8 +289,8 @@ async function montarVideo(videoPath, workDir, assets) {
       const f = fases[fase];
       const dur = Math.max(0.1, f.end - f.start);
       const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".mp3");
-      run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -c:a copy "' + chunkPath + '"');
-      chunks.push(chunkPath);
+      run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -c:a aac -ar 44100 "' + chunkPath + '.aac.mp4"');
+      chunks.push(chunkPath + '.aac.mp4');
     }
 
     // Lista de arquivos para concatenar
