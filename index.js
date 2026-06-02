@@ -86,24 +86,21 @@ async function transcreverOpenAI(audioPath) {
   }
 }
 
-// NOVA FUNÇÃO: classifica fases via GPT-4o-mini
 async function classificarFases(transcricao, durTotal) {
   if (!transcricao || !transcricao.segments) return null;
   try {
     log("Classificando fases com GPT...");
     const texto = transcricao.segments.map(s => "[" + s.start.toFixed(1) + "s] " + s.text).join(" ");
-    const prompt = `Você é um especialista em copywriting de vídeos curtos para redes sociais.
-Analise a transcrição abaixo e identifique os timestamps de início e fim de cada fase do roteiro.
-As fases são: hook, participacao, body, reframe, cta.
-Duração total: ${durTotal.toFixed(1)}s
+    const prompt = `Voce e um especialista em copywriting de videos curtos para redes sociais.
+Analise a transcricao abaixo e identifique os timestamps de inicio e fim de cada fase do roteiro.
+As fases sao: hook, participacao, body, reframe, cta.
+Duracao total: ${durTotal.toFixed(1)}s
 
-Transcrição:
+Transcricao:
 ${texto}
 
-Responda APENAS com JSON válido neste formato exato, sem explicações:
-{"hook":{"start":0,"end":5},"participacao":{"start":5,"end":8},"body":{"start":8,"end":35},"reframe":{"start":35,"end":45},"cta":{"start":45,"end":${durTotal.toFixed(1)}}}
-
-Se uma fase não existir no vídeo, use os timestamps mais próximos do padrão acima.`;
+Responda APENAS com JSON valido neste formato exato, sem explicacoes, sem markdown, sem backticks:
+{"hook":{"start":0,"end":5},"participacao":{"start":5,"end":8},"body":{"start":8,"end":35},"reframe":{"start":35,"end":45},"cta":{"start":45,"end":${durTotal.toFixed(1)}}}`;
 
     const response = await axios.post("https://api.openai.com/v1/chat/completions", {
       model: "gpt-4o-mini",
@@ -124,7 +121,6 @@ Se uma fase não existir no vídeo, use os timestamps mais próximos do padrão 
   }
 }
 
-// NOVA FUNÇÃO: baixa trilhas por fase do R2
 async function baixarTrilhas(workDir, musicaFallback) {
   const fases = ["hook", "participacao", "body", "reframe", "cta"];
   const trilhas = {};
@@ -244,7 +240,6 @@ async function montarVideo(videoPath, workDir, assets) {
   const ctas = detectarCTAs(transcricao);
   const vf = gerarVF(transcricao);
 
-  // Classifica fases e baixa trilhas
   const fases = await classificarFases(transcricao, durTotal);
   const trilhas = await baixarTrilhas(workDir, assets.music);
 
@@ -276,33 +271,36 @@ async function montarVideo(videoPath, workDir, assets) {
     vidCtaPath = path.join(workDir, "vid_cta_" + (ctas.length - 1) + "_" + jobId + ".mp4");
   }
 
-  // Step 3: musica por fase (ou fallback musica unica)
+  // Step 3: musica por fase
+  let musicaFinal = assets.music;
   if (fases && trilhas) {
-    const fasesOrdem = ["hook", "participacao", "body", "reframe", "cta"];
-    const fasesValidas = fasesOrdem.filter(fase => fases[fase]);
-    const trilhaPath = path.join(workDir, "trilha_final_" + jobId + ".mp3");
+    try {
+      const fasesOrdem = ["hook", "participacao", "body", "reframe", "cta"];
+      const fasesValidas = fasesOrdem.filter(fase => fases[fase]);
+      const chunks = [];
 
-    // Concatena trilhas em arquivo unico via node (evita complexidade FFmpeg)
-    const chunks = [];
-    for (let i = 0; i < fasesValidas.length; i++) {
-      const fase = fasesValidas[i];
-      const f = fases[fase];
-      const dur = Math.max(0.1, f.end - f.start);
-      const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".mp3");
-      run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -c:a aac -ar 44100 "' + chunkPath + '.aac.mp4"');
-      chunks.push(chunkPath + '.aac.mp4');
+      for (let i = 0; i < fasesValidas.length; i++) {
+        const fase = fasesValidas[i];
+        const f = fases[fase];
+        const dur = Math.max(0.1, f.end - f.start);
+        const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".wav");
+        run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -ar 44100 -ac 2 -f wav "' + chunkPath + '"');
+        chunks.push(chunkPath);
+      }
+
+      const listPath = path.join(workDir, "concat_list_" + jobId + ".txt");
+      fs.writeFileSync(listPath, chunks.map(c => "file '" + c + "'").join("\n"));
+      const trilhaPath = path.join(workDir, "trilha_final_" + jobId + ".wav");
+      run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -ar 44100 -ac 2 "' + trilhaPath + '"');
+      musicaFinal = trilhaPath;
+      log("Trilha por fases montada OK");
+    } catch(e) {
+      log("Erro trilha por fases, usando fallback: " + e.message);
+      musicaFinal = assets.music;
     }
-
-    // Lista de arquivos para concatenar
-    const listPath = path.join(workDir, "concat_list_" + jobId + ".txt");
-    fs.writeFileSync(listPath, chunks.map(c => "file '" + c + "'").join("\n"));
-    run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -c:a aac -ar 44100 "' + trilhaPath + '"');
-
-    run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + trilhaPath + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
-  } else {
-    // Fallback: musica unica
-    run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + assets.music + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
   }
+
+  run('ffmpeg -y -i "' + vidCtaPath + '" -i "' + musicaFinal + '" -filter_complex "[1:a]atrim=0:' + durTotal + ',asetpts=PTS-STARTPTS,volume=0.13,afade=t=out:st=' + (durTotal - 2).toFixed(2) + ':d=2[mus];[0:a]volume=2.5[orig];[mus][orig]amix=inputs=2:duration=first:dropout_transition=2[afinal]" -map "0:v" -map "[afinal]" -c:v copy -c:a aac -b:a 128k -ar 44100 -t ' + durTotal + ' "' + outputPath + '"');
 
   log("Video montado: " + outputPath);
   return outputPath;
