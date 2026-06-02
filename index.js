@@ -284,7 +284,8 @@ async function montarVideo(videoPath, workDir, assets) {
         const f = fases[fase];
         const dur = Math.max(0.1, f.end - f.start);
         const chunkPath = path.join(workDir, "chunk_" + i + "_" + jobId + ".wav");
-        run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -ar 44100 -ac 2 -f wav "' + chunkPath + '"');
+        const vol = fase === 'hook' ? '0.13' : '0.20';
+run('ffmpeg -y -i "' + trilhas[fase] + '" -t ' + dur.toFixed(2) + ' -ar 44100 -ac 2 -af "volume=' + vol + ',afade=t=in:st=0:d=0.3,afade=t=out:st=' + Math.max(0, dur - 0.3).toFixed(2) + ':d=0.3" -f wav "' + chunkPath + '"');
         chunks.push(chunkPath);
       }
 
