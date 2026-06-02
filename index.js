@@ -121,6 +121,42 @@ Responda APENAS com JSON valido neste formato exato, sem explicacoes, sem markdo
   }
 }
 
+async function gerarHeadlines(transcricao, fases) {
+  if (!transcricao || !fases) return null;
+  try {
+    log("Gerando headlines por fase com GPT...");
+    const texto = transcricao.segments.map(s => "[" + s.start.toFixed(1) + "s] " + s.text).join(" ");
+    const prompt = `Voce e um especialista em copywriting de videos curtos para redes sociais espiritualidade e amor.
+Analise a transcricao e gere UMA headline curta (maximo 5 palavras) para cada fase do video.
+As headlines devem ser em INGLES, impactantes, misterosas e alinhadas com o nicho de espiritualidade, tarot e alma gemea.
+
+Transcricao:
+${texto}
+
+Fases identificadas: ${JSON.stringify(fases)}
+
+Responda APENAS com JSON valido sem explicacoes sem markdown sem backticks:
+{"hook":"headline aqui","participacao":"headline aqui","body":"headline aqui","reframe":"headline aqui","cta":"headline aqui"}`;
+
+    const response = await axios.post("https://api.openai.com/v1/chat/completions", {
+      model: "gpt-4o-mini",
+      max_tokens: 150,
+      messages: [{ role: "user", content: prompt }]
+    }, {
+      headers: { "Authorization": "Bearer " + OPENAI_KEY, "Content-Type": "application/json" },
+      timeout: 30000
+    });
+
+    const content = response.data.choices[0].message.content.trim().replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+    const headlines = JSON.parse(content);
+    log("Headlines geradas: " + JSON.stringify(headlines));
+    return headlines;
+  } catch(e) {
+    log("Erro headlines: " + e.message);
+    return null;
+  }
+}
+
 async function baixarTrilhas(workDir, musicaFallback) {
   const fases = ["hook", "participacao", "body", "reframe", "cta"];
   const trilhas = {};
@@ -195,11 +231,12 @@ function escaparFFmpeg(texto) {
     .replace(/%/g, "\\%");
 }
 
-function gerarVF(transcricao) {
+function gerarVF(transcricao, fases, headlines) {
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
   let vf = "format=yuv420p";
   const lh = 48;
 
+  // Legendas normais
   if (transcricao && transcricao.segments) {
     for (const seg of transcricao.segments) {
       const textoRaw = (seg.text || "").trim().substring(0, 120);
@@ -214,6 +251,23 @@ function gerarVF(transcricao) {
         const y = "(" + yBase + ")+" + (i * lh);
         vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=40:fontcolor=white:borderw=3:bordercolor=black:x=(w-tw)/2:y=" + y + ":enable='between(t," + st + "," + et + ")'";
       });
+    }
+  }
+
+  // Headlines por fase com caixa colorida
+  if (fases && headlines) {
+    const corPorFase = { hook: "0x2D0047", participacao: "0x4A0020", body: "0x0D0D2B", reframe: "0x5C3D00", cta: "0x3D1A5C" };
+    const fasesOrdem = ["hook", "participacao", "body", "reframe", "cta"];
+    for (const fase of fasesOrdem) {
+      if (!fases[fase] || !headlines[fase]) continue;
+      const st = fases[fase].start.toFixed(2);
+      const et = fases[fase].end.toFixed(2);
+      const cor = corPorFase[fase];
+      const texto = escaparFFmpeg(headlines[fase].substring(0, 40));
+      // Caixa de fundo
+      vf += ",drawbox=x=(w-500)/2:y=48:w=500:h=56:color=" + cor + "@0.85:t=fill:enable='between(t," + st + "," + et + ")'";
+      // Texto da headline
+      vf += ",drawtext=fontfile='" + font + "':text='" + texto + "':fontsize=30:fontcolor=0xFFD700:x=(w-tw)/2:y=58:enable='between(t," + st + "," + et + ")'";
     }
   }
 
@@ -238,9 +292,10 @@ async function montarVideo(videoPath, workDir, assets) {
 
   const transcricao = await transcreverOpenAI(audioPath);
   const ctas = detectarCTAs(transcricao);
-  const vf = gerarVF(transcricao);
+  const vf = gerarVF(transcricao, fases, headlines);
 
   const fases = await classificarFases(transcricao, durTotal);
+  const headlines = await gerarHeadlines(transcricao, fases);
   const trilhas = await baixarTrilhas(workDir, assets.music);
 
   const setaPath = path.join(workDir, "seta_cta.png");
