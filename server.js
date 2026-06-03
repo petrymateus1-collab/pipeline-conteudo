@@ -29,7 +29,12 @@ function log(msg) { console.log("[" + new Date().toISOString() + "] " + msg); }
 function run(cmd) { log("CMD: " + cmd.substring(0, 120)); return execSync(cmd, { stdio: "pipe" }).toString(); }
 
 async function downloadFile(url, destPath) {
-  const r = await axios({ url, responseType: "stream" });
+  const r = await axios({ 
+    url, 
+    responseType: "stream",
+    maxRedirects: 10,
+    headers: { "User-Agent": "Mozilla/5.0" }
+  });
   return new Promise((res, rej) => {
     const w = fs.createWriteStream(destPath);
     r.data.pipe(w);
