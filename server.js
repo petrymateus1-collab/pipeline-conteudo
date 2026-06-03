@@ -252,8 +252,7 @@ function gerarZoomVF(transcricao) {
 
 function gerarVF(transcricao, fases, headlines) {
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
-  const zoomVF = gerarZoomVF(transcricao);
-  let vf = "format=yuv420p" + zoomVF;
+  let vf = "format=yuv420p";
   const lh = 48;
 
   // Legendas normais
