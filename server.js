@@ -237,9 +237,23 @@ function escaparFFmpeg(texto) {
     .replace(/%/g, "\\%");
 }
 
+function gerarZoomVF(transcricao) {
+  if (!transcricao || !transcricao.segments) return "";
+  let zoomFilter = "";
+  transcricao.segments.forEach((seg, i) => {
+    const st = seg.start.toFixed(2);
+    const et = seg.end.toFixed(2);
+    const scale = i % 2 === 0 ? "1.04" : "1.02";
+    const scaleInv = i % 2 === 0 ? "0.9615" : "0.9804";
+    zoomFilter += ",scale=iw*" + scale + ":ih*" + scale + ":enable='between(t," + st + "," + et + ")',crop=iw*" + scaleInv + ":ih*" + scaleInv + ":(iw-iw*" + scaleInv + ")/2:(ih-ih*" + scaleInv + ")/2:enable='between(t," + st + "," + et + ")'";
+  });
+  return zoomFilter;
+}
+
 function gerarVF(transcricao, fases, headlines) {
   const font = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf";
-  let vf = "format=yuv420p";
+  const zoomVF = gerarZoomVF(transcricao);
+  let vf = "format=yuv420p" + zoomVF;
   const lh = 48;
 
   // Legendas normais
