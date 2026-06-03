@@ -397,7 +397,7 @@ app.post("/processar", upload.single("video"), async (req, res) => {
         log("Concatenando hook + body...");
         const listPath = path.join(workDir, "concat.txt");
         fs.writeFileSync(listPath, 'file \'' + hookPath + '\'\nfile \'' + bodyPath + '\'');
-        run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -c copy "' + videoPath + '"');
+        run('ffmpeg -y -f concat -safe 0 -i "' + listPath + '" -c:v libx264 -preset fast -crf 23 -c:a aac -ar 44100 -ac 2 "' + videoPath + '"');
         log("Concatenacao OK");
       } else {
         videoPath = bodyPath;
